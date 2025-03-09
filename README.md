@@ -81,26 +81,22 @@ mistral-chat-cli-rs [OPTIONS] <SUBCOMMAND>
 
 ## 🔑 Configuration
 
-To interact with the APIs, you’ll need to set up your API keys in a configuration file or as environment variables:
+To interact with the APIs, you’ll need to set up your API keys in a configuration file. The configuration file should contain:
 
-- **`MISTRAL_API_KEY`**: Your key for the Mistral API.
-- **`CODESTRAL_API_KEY`**: Your key for the Codestral API.
+- **`mistral_api_key`**: Your key for the Mistral API.
+- **`codestral_api_key`**: Your key for the Codestral API.
 
-### How to Set Environment Variables
+### Configuration File
 
-- **Linux/Mac**
-  Add these lines to your shell (e.g., `~/.bashrc` or `~/.zshrc`):
-  ```bash
-  export MISTRAL_API_KEY=your_mistral_key
-  export CODESTRAL_API_KEY=your_codestral_key
-  ```
+The configuration file is typically named `config.toml` and should be located in the root directory of the project. You can generate a sample configuration file using the `config generate` command.
 
-- **Windows**
-  Use the Command Prompt to set them:
-  ```cmd
-  set MISTRAL_API_KEY=your_mistral_key
-  set CODESTRAL_API_KEY=your_codestral_key
-  ```
+### Example Configuration File
+
+```toml
+mistral_api_key = "your_mistral_api_key"
+codestral_api_key = "your_codestral_api_key"
+debug = false
+```
 
 > **Tip**: Get your API keys from the Mistral and Codestral service providers and keep them secure!
 
@@ -195,4 +191,4 @@ This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) f
 
 ---
 
-Happy coding, chatting, and exploring with **Mistral-Codestral CLI**!
+Happy coding, chatting, and exploring with **Mistral CLI**!
