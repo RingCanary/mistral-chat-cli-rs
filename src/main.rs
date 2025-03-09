@@ -6,6 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+use config::{Config as ConfigFile, File, Environment};
 
 /// Command-line argument parser for the CLI.
 #[derive(Parser)]
@@ -79,6 +80,29 @@ struct Choice {
     /// The message associated with the choice.
     message: ResponseMessage,
 }
+
+/// Struct representing configuration for the CLI.
+#[derive(Debug, Deserialize)]
+struct Config {
+    mistral_api_key: String,
+    codestral_api_key: String,
+    debug: bool,
+}
+
+impl Config {
+    fn from_file(file_path: &str) -> Result<Self, config::ConfigError> {
+        let settings = ConfigFile::builder()
+            // Add configuration from a file
+            .add_source(File::with_name(file_path))
+            // Add configuration from environment variables (optional)
+            .add_source(Environment::with_prefix("APP"))
+            .build()?;
+
+        // Try to deserialize the configuration into the `Config` struct
+        settings.try_deserialize()
+    }
+}
+
 
 /// A client for interacting with the Mistral and Codestral APIs.
 ///
@@ -406,20 +430,17 @@ impl ChatClient {
     }
 }
 
-/// Retrieves an environment variable with a default value and better error messages.
-fn get_env_var(name: &str) -> Result<String> {
-    std::env::var(name).context(format!("Environment variable {} not set", name))
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize the logger
     env_logger::init();
 
     let cli = Cli::parse();
-    let mistral_api_key = get_env_var("MISTRAL_API_KEY")?;
-    let codestral_api_key = get_env_var("CODESTRAL_API_KEY")?;
-    let chat_client = ChatClient::new(mistral_api_key, codestral_api_key, cli.debug);
+
+    // Load configuration from a file
+    let config = Config::from_file("config.toml").expect("Failed to read configuration file");
+
+    let chat_client = ChatClient::new(config.mistral_api_key, config.codestral_api_key, config.debug);
 
     match cli.command {
         Commands::Chat { prompt } => {
