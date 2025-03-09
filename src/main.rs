@@ -6,51 +6,83 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
+/// Command-line argument parser for the CLI.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
+    /// Enable debug mode for detailed logs.
     #[arg(long)]
     debug: bool,
+
+    /// Subcommand to execute (e.g., chat, test, code).
     #[command(subcommand)]
     command: Commands,
 }
 
+/// Enum representing the available subcommands.
 #[derive(Subcommand)]
 enum Commands {
+    /// Send a chat prompt to the API.
     Chat { prompt: String },
+
+    /// Test the API connection.
     Test,
+
+    /// Analyze a code snippet using the API.
     Code { code: String },
 }
 
+/// Struct representing a request message sent to the API.
 #[derive(Serialize)]
 struct RequestMessage {
+    /// The role of the message sender (e.g., "user").
     role: String,
+
+    /// The content of the message.
     content: String,
 }
 
+/// Struct representing a response message received from the API.
 #[derive(Deserialize)]
 struct ResponseMessage {
+    /// The content of the response message.
     content: String,
 }
 
+/// Struct representing a chat request sent to the API.
 #[derive(Serialize)]
 struct ChatRequest {
+    /// The model to use for the chat completion.
     model: String,
+
+    /// A vector of messages in the chat.
     messages: Vec<RequestMessage>,
+
+    /// Whether to stream the response.
     stream: bool,
+
+    /// The maximum number of tokens to generate.
     max_tokens: Option<u32>,
 }
 
+/// Struct representing a chat response received from the API.
 #[derive(Deserialize)]
 struct ChatResponse {
+    /// A vector of choices in the chat response.
     choices: Vec<Choice>,
 }
 
+/// Struct representing a choice in the chat response.
 #[derive(Deserialize)]
 struct Choice {
+    /// The message associated with the choice.
     message: ResponseMessage,
 }
 
+/// A client for interacting with the Mistral and Codestral APIs.
+///
+/// This struct manages the API keys and provides methods to send requests
+/// to the Mistral and Codestral APIs for chat, testing connections, and analyzing code.
 struct ChatClient {
     client: Client,
     mistral_api_key: String,
@@ -59,6 +91,17 @@ struct ChatClient {
 }
 
 impl ChatClient {
+    /// Creates a new `ChatClient` with the given API keys and debug mode.
+    ///
+    /// # Arguments
+    ///
+    /// * `mistral_api_key` - The API key for the Mistral API.
+    /// * `codestral_api_key` - The API key for the Codestral API.
+    /// * `debug` - A boolean indicating whether debug mode is enabled.
+    ///
+    /// # Returns
+    ///
+    /// A new `ChatClient` instance.
     fn new(mistral_api_key: String, codestral_api_key: String, debug: bool) -> Self {
         ChatClient {
             client: Client::new(),
@@ -68,7 +111,20 @@ impl ChatClient {
         }
     }
 
-    /// Streams chat completions from the API and prints them to stdout
+    /// Streams chat completions from the API and prints them to stdout.
+    ///
+    /// This method sends a request to the specified model's API and streams the response
+    /// to stdout. It retries the request up to three times in case of transient errors.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model to use for the chat completion (e.g., "mistral-large-latest" or "codestral-latest").
+    /// * `messages` - A vector of `RequestMessage` structs representing the chat messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails after multiple attempts or if there is an issue
+    /// with the response stream.
     async fn chat_stream(&self, model: &str, messages: Vec<RequestMessage>) -> Result<()> {
         if self.debug {
             println!("DEBUG: Sending streaming request to {} API", model);
@@ -185,7 +241,14 @@ impl ChatClient {
         Ok(())
     }
 
-    /// Tests API connectivity with a minimal request
+    /// Tests API connectivity with a minimal request.
+    ///
+    /// This method sends a minimal request to both the Mistral and Codestral APIs to test
+    /// the connectivity and prints the result to stdout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or if the API key is invalid.
     async fn test_connection(&self) -> Result<()> {
         if self.debug {
             println!("DEBUG: Testing API connection...");
@@ -286,7 +349,22 @@ impl ChatClient {
         Ok(())
     }
 
-    /// Analyzes code using the Codestral API
+    /// Analyzes code using the Codestral API.
+    ///
+    /// This method sends the given code to the Codestral API for analysis and returns
+    /// the response as a string.
+    ///
+    /// # Arguments
+    ///
+    /// * `code` - The code to analyze as a string.
+    ///
+    /// # Returns
+    ///
+    /// The analysis result as a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or if there is an issue with the response.
     async fn analyze_code(&self, code: String) -> Result<String> {
         if self.debug {
             println!("DEBUG: Sending code to Codestral API");
