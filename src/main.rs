@@ -198,11 +198,53 @@ impl ChatClient {
         }
 
         if status.is_success() {
-            println!("API connection successful");
+            println!("MISTRAL-API connection successful");
         } else {
-            println!("API connection failed: {}", status);
+            println!("MISTRAL-API connection failed: {}", status);
             if self.debug {
                 let text = response.text().await?;
+                println!("DEBUG: Response body: {}", text);
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                println!("Hint: Check your API key.");
+            }
+        }
+
+        let code_messages = vec![RequestMessage {
+            role: "user".to_string(),
+            content: "Test".to_string(),
+        }];
+
+        let codestral_request = ChatRequest {
+            model: "codestral-latest".to_string(),
+            messages: code_messages,
+            stream: false,
+            max_tokens: None,
+        };
+
+        if self.debug {
+            println!("DEBUG: Request body: {}", serde_json::to_string(&codestral_request)?);
+        }
+
+        let codestral_response = self.client
+            .post("https://codestral.mistral.ai/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.codestral_api_key))
+            .json(&codestral_request)
+            .send()
+            .await?;
+
+        let status = codestral_response.status();
+
+        if self.debug {
+            println!("DEBUG: Status: {}", status);
+        }
+
+        if status.is_success() {
+            println!("CODESTRAL-API connection successful");
+        } else {
+            println!("CODESTRAL-API connection failed: {}", status);
+            if self.debug {
+                let text = codestral_response.text().await?;
                 println!("DEBUG: Response body: {}", text);
             }
             if status == reqwest::StatusCode::UNAUTHORIZED {
