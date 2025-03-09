@@ -1,6 +1,6 @@
-# Mistral-Codestral CLI
+# Mistral CLI
 
-Welcome to **Mistral-Codestral CLI**, a sleek and powerful command-line interface (CLI) tool built in Rust. This application lets you harness the capabilities of the Mistral and Codestral APIs to chat with AI, test API connections, and analyze code snippets—all from the comfort of your terminal.
+Welcome to **Mistral CLI**, a sleek and powerful command-line interface (CLI) tool built in Rust. This application lets you harness the capabilities of the Mistral and Codestral APIs to chat with AI, test API connections, and analyze code snippets—all from the comfort of your terminal.
 
 ---
 
@@ -26,7 +26,7 @@ Before you begin, ensure you have the following installed:
    Grab the code from GitHub and navigate into the project folder:
    ```bash
    git clone https://github.com/RingCanary/mistral-chat-cli-rs.git
-   cd mistral-codestral-cli
+   cd mistral-chat-cli-rs
    ```
 
 2. **Build the Application**  
@@ -47,7 +47,7 @@ Before you begin, ensure you have the following installed:
 
 The CLI follows this structure:
 ```
-mistral-codestral-cli [OPTIONS] <SUBCOMMAND>
+mistral-chat-cli-rs [OPTIONS] <SUBCOMMAND>
 ```
 
 ### Available Subcommands
