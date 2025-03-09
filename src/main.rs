@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
+use log::{debug, error, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -127,9 +128,9 @@ impl ChatClient {
     /// with the response stream.
     async fn chat_stream(&self, model: &str, messages: Vec<RequestMessage>) -> Result<()> {
         if self.debug {
-            println!("DEBUG: Sending streaming request to {} API", model);
-            println!(
-                "DEBUG: Using URL: {}",
+            debug!("Sending streaming request to {} API", model);
+            debug!(
+                "Using URL: {}",
                 if model.contains("codestral") {
                     "https://codestral.mistral.ai/v1/chat/completions"
                 } else {
@@ -146,7 +147,7 @@ impl ChatClient {
         };
 
         if self.debug {
-            println!("DEBUG: Request body: {}", serde_json::to_string(&request)?);
+            debug!("Request body: {}", serde_json::to_string(&request)?);
         }
 
         let url = if model.contains("codestral") {
@@ -176,7 +177,7 @@ impl ChatClient {
                 Ok(resp) => break resp,
                 Err(err) if attempts < max_attempts => {
                     attempts += 1;
-                    println!("Retry attempt {}: {}", attempts, err);
+                    error!("Retry attempt {}: {}", attempts, err);
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }
                 Err(err) => {
@@ -186,7 +187,7 @@ impl ChatClient {
         };
 
         if self.debug {
-            println!("DEBUG: Response status: {}", response.status());
+            debug!("Response status: {}", response.status());
         }
 
         let mut stream = response.bytes_stream();
@@ -197,14 +198,14 @@ impl ChatClient {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     if self.debug {
-                        println!("DEBUG: Received chunk: {}", text);
+                        debug!("Received chunk: {}", text);
                     }
                     for line in text.lines() {
                         if line.starts_with("data: ") {
                             let data = &line[6..];
                             if data == "[DONE]" {
                                 if self.debug {
-                                    println!("DEBUG: Received [DONE]");
+                                    debug!("Received [DONE]");
                                 }
                                 stdout.write_all(b"\n").await?;
                                 stdout.flush().await?;
@@ -218,12 +219,12 @@ impl ChatClient {
                                         stdout.write_all(content.as_bytes()).await?;
                                         stdout.flush().await?;
                                     } else if self.debug {
-                                        println!("DEBUG: No content in JSON: {}", json);
+                                        debug!("No content in JSON: {}", json);
                                     }
                                 }
                                 Err(e) => {
                                     if self.debug {
-                                        println!("DEBUG: JSON parse error: {} - Data: {}", e, data);
+                                        debug!("JSON parse error: {} - Data: {}", e, data);
                                     }
                                 }
                             }
@@ -232,7 +233,7 @@ impl ChatClient {
                 }
                 Err(e) => {
                     if self.debug {
-                        println!("DEBUG: Chunk error: {}", e);
+                        debug!("Chunk error: {}", e);
                     }
                 }
             }
@@ -251,7 +252,7 @@ impl ChatClient {
     /// Returns an error if the request fails or if the API key is invalid.
     async fn test_connection(&self) -> Result<()> {
         if self.debug {
-            println!("DEBUG: Testing API connection...");
+            debug!("Testing API connection...");
         }
 
         let messages = vec![RequestMessage {
@@ -267,7 +268,7 @@ impl ChatClient {
         };
 
         if self.debug {
-            println!("DEBUG: Request body: {}", serde_json::to_string(&request)?);
+            debug!("Request body: {}", serde_json::to_string(&request)?);
         }
 
         let response = self
@@ -281,19 +282,20 @@ impl ChatClient {
         let status = response.status();
 
         if self.debug {
-            println!("DEBUG: Status: {}", status);
+            debug!("Status: {}", status);
         }
 
         if status.is_success() {
+            info!("MISTRAL-API connection successful");
             println!("MISTRAL-API connection successful");
         } else {
-            println!("MISTRAL-API connection failed: {}", status);
+            error!("MISTRAL-API connection failed: {}", status);
             if self.debug {
                 let text = response.text().await?;
-                println!("DEBUG: Response body: {}", text);
+                debug!("Response body: {}", text);
             }
             if status == reqwest::StatusCode::UNAUTHORIZED {
-                println!("Hint: Check your API key.");
+                error!("Hint: Check your API key.");
             }
         }
 
@@ -310,8 +312,8 @@ impl ChatClient {
         };
 
         if self.debug {
-            println!(
-                "DEBUG: Request body: {}",
+            debug!(
+                "Request body: {}",
                 serde_json::to_string(&codestral_request)?
             );
         }
@@ -330,19 +332,20 @@ impl ChatClient {
         let status = codestral_response.status();
 
         if self.debug {
-            println!("DEBUG: Status: {}", status);
+            debug!("Status: {}", status);
         }
 
         if status.is_success() {
+            info!("CODESTRAL-API connection successful");
             println!("CODESTRAL-API connection successful");
         } else {
-            println!("CODESTRAL-API connection failed: {}", status);
+            error!("CODESTRAL-API connection failed: {}", status);
             if self.debug {
                 let text = codestral_response.text().await?;
-                println!("DEBUG: Response body: {}", text);
+                debug!("Response body: {}", text);
             }
             if status == reqwest::StatusCode::UNAUTHORIZED {
-                println!("Hint: Check your API key.");
+                error!("Hint: Check your API key.");
             }
         }
 
@@ -367,7 +370,7 @@ impl ChatClient {
     /// Returns an error if the request fails or if there is an issue with the response.
     async fn analyze_code(&self, code: String) -> Result<String> {
         if self.debug {
-            println!("DEBUG: Sending code to Codestral API");
+            debug!("Sending code to Codestral API");
         }
 
         let messages = vec![RequestMessage {
@@ -383,7 +386,7 @@ impl ChatClient {
         };
 
         if self.debug {
-            println!("DEBUG: Request body: {}", serde_json::to_string(&request)?);
+            debug!("Request body: {}", serde_json::to_string(&request)?);
         }
 
         let response = self
@@ -403,12 +406,19 @@ impl ChatClient {
     }
 }
 
+/// Retrieves an environment variable with a default value and better error messages.
+fn get_env_var(name: &str) -> Result<String> {
+    std::env::var(name).context(format!("Environment variable {} not set", name))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize the logger
+    env_logger::init();
+
     let cli = Cli::parse();
-    let mistral_api_key = std::env::var("MISTRAL_API_KEY").context("MISTRAL_API_KEY not set")?;
-    let codestral_api_key =
-        std::env::var("CODESTRAL_API_KEY").context("CODESTRAL_API_KEY not set")?;
+    let mistral_api_key = get_env_var("MISTRAL_API_KEY")?;
+    let codestral_api_key = get_env_var("CODESTRAL_API_KEY")?;
     let chat_client = ChatClient::new(mistral_api_key, codestral_api_key, cli.debug);
 
     match cli.command {
@@ -429,7 +439,7 @@ async fn main() -> Result<()> {
         }
         Commands::Code { code } => {
             let analysis = chat_client.analyze_code(code).await?;
-            println!("{}", analysis);
+            info!("{}", analysis);
         }
     }
 
