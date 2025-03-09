@@ -1,47 +1,53 @@
 use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
 use reqwest::Client;
-use tokio::io::{self, AsyncWriteExt};
+use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use futures_util::StreamExt;
-
+use std::error::Error;
 
 #[derive(Parser)]
-#[command(name = "mistral-chat")]
-#[command(about = "A CLI chat app using Mistral AI", long_about = None)]
+#[command(version, about)]
 struct Cli {
+    #[arg(long)]
+    debug: bool,
     #[command(subcommand)]
     command: Commands,
-
-    #[arg(long, default_value_t = false)]
-    debug: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Chat with Mistral AI
-    Chat {
-        #[arg(short, long)]
-        prompt: String,
-    },
-    /// Test system connectivity and API availability
+    Chat { prompt: String },
     Test,
-    /// Analyze code with Codestral
-    Code {
-        #[arg(short, long)]
-        code: String,
-    },
+    Code { code: String },
+}
+
+#[derive(Serialize)]
+struct RequestMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct ResponseMessage {
+    content: String,
 }
 
 #[derive(Serialize)]
 struct ChatRequest {
-    prompt: String,
+    model: String,
+    messages: Vec<RequestMessage>,
     stream: bool,
+    max_tokens: Option<u32>,
 }
 
 #[derive(Deserialize)]
 struct ChatResponse {
-    message: String,
-    // Add more fields as needed based on API documentation
+    choices: Vec<Choice>,
+}
+
+#[derive(Deserialize)]
+struct Choice {
+    message: ResponseMessage,
 }
 
 struct ChatClient {
@@ -51,7 +57,6 @@ struct ChatClient {
 }
 
 impl ChatClient {
-    /// Create a new ChatClient instance
     fn new(api_key: String, debug: bool) -> Self {
         ChatClient {
             client: Client::new(),
@@ -60,62 +65,139 @@ impl ChatClient {
         }
     }
 
-    /// Stream chat responses from Mistral API
-    async fn chat_stream(&self, prompt: String) -> Result<(), Box<dyn std::error::Error>> {
+    /// Streams chat completions from the API and prints them to stdout
+    async fn chat_stream(&self, model: &str, messages: Vec<RequestMessage>) -> Result<(), Box<dyn Error>> {
         if self.debug {
-            println!("DEBUG: Sending prompt to Mistral API: {}", prompt);
+            println!("DEBUG: Sending streaming request to {} API", model);
+            println!("DEBUG: Using URL: {}", if model.contains("codestral") {
+                "https://codestral.mistral.ai/v1/chat/completions"
+            } else {
+                "https://api.mistral.ai/v1/chat/completions"
+            });
         }
 
         let request = ChatRequest {
-            prompt,
+            model: model.to_string(),
+            messages,
             stream: true,
+            max_tokens: None,
         };
 
-        let mut stream = self.client
-            .post("https://api.mistral.ai/v1/chat/completions")
+        if self.debug {
+            println!("DEBUG: Request body: {}", serde_json::to_string(&request)?);
+        }
+
+        let url = if model.contains("codestral") {
+            "https://codestral.mistral.ai/v1/chat/completions"
+        } else {
+            "https://api.mistral.ai/v1/chat/completions"
+        };
+
+        let response = self.client
+            .post(url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&request)
             .send()
-            .await?
-            .bytes_stream();
+            .await?;
 
-        let mut stdout = io::stdout();
+        if self.debug {
+            println!("DEBUG: Response status: {}", response.status());
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut stdout = tokio::io::stdout();
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            if self.debug {
-                println!("DEBUG: Received chunk: {:?}", chunk);
+            match chunk {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    if self.debug {
+                        println!("DEBUG: Received chunk: {}", text);
+                    }
+                    for line in text.lines() {
+                        if line.starts_with("data: ") {
+                            let data = &line[6..];
+                            if data == "[DONE]" {
+                                if self.debug {
+                                    println!("DEBUG: Received [DONE]");
+                                }
+                                stdout.write_all(b"\n").await?;
+                                stdout.flush().await?;
+                                break;
+                            }
+                            match serde_json::from_str::<serde_json::Value>(data) {
+                                Ok(json) => {
+                                    if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
+                                        stdout.write_all(content.as_bytes()).await?;
+                                        stdout.flush().await?;
+                                    } else if self.debug {
+                                        println!("DEBUG: No content in JSON: {}", json);
+                                    }
+                                }
+                                Err(e) => {
+                                    if self.debug {
+                                        println!("DEBUG: JSON parse error: {} - Data: {}", e, data);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if self.debug {
+                        println!("DEBUG: Chunk error: {}", e);
+                    }
+                }
             }
-            // Note: You may need to parse the chunk based on API format (e.g., JSON lines)
-            stdout.write_all(&chunk).await?;
-            stdout.flush().await?;
         }
 
         Ok(())
     }
 
-    /// Test connectivity to the Mistral API
-    async fn test_connection(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Tests API connectivity with a minimal request
+    async fn test_connection(&self) -> Result<(), Box<dyn Error>> {
         if self.debug {
             println!("DEBUG: Testing API connection...");
         }
 
+        let messages = vec![RequestMessage {
+            role: "user".to_string(),
+            content: "Test".to_string(),
+        }];
+
+        let request = ChatRequest {
+            model: "mistral-small".to_string(),
+            messages,
+            stream: false,
+            max_tokens: Some(1),
+        };
+
+        if self.debug {
+            println!("DEBUG: Request body: {}", serde_json::to_string(&request)?);
+        }
+
         let response = self.client
-            .get("https://api.mixtral.ai/v1/health") // Replace with actual health endpoint
+            .post("https://api.mistral.ai/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&request)
             .send()
             .await?;
 
+        let status = response.status(); // Store the status before consuming response
+
         if self.debug {
-            println!("DEBUG: Status: {}", response.status());
-            println!("DEBUG: Headers: {:?}", response.headers());
+            println!("DEBUG: Status: {}", status);
         }
 
-        if response.status().is_success() {
+        if status.is_success() {
             println!("API connection successful");
         } else {
-            println!("API connection failed: {}", response.status());
-            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            println!("API connection failed: {}", status);
+            if self.debug {
+                let text = response.text().await?; // Safe to consume response here
+                println!("DEBUG: Response body: {}", text);
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED {
                 println!("Hint: Check your API key.");
             }
         }
@@ -123,16 +205,27 @@ impl ChatClient {
         Ok(())
     }
 
-    /// Analyze code using Codestral API
-    async fn analyze_code(&self, code: String) -> Result<String, Box<dyn std::error::Error>> {
+    /// Analyzes code using the Codestral API
+    async fn analyze_code(&self, code: String) -> Result<String, Box<dyn Error>> {
         if self.debug {
-            println!("DEBUG: Sending code to Codestral API: {}", code);
+            println!("DEBUG: Sending code to Codestral API");
         }
 
+        let messages = vec![RequestMessage {
+            role: "user".to_string(),
+            content: code,
+        }];
+
         let request = ChatRequest {
-            prompt: code,
+            model: "codestral".to_string(),
+            messages,
             stream: false,
+            max_tokens: None,
         };
+
+        if self.debug {
+            println!("DEBUG: Request body: {}", serde_json::to_string(&request)?);
+        }
 
         let response = self.client
             .post("https://codestral.mistral.ai/v1/chat/completions")
@@ -143,34 +236,29 @@ impl ChatClient {
             .json::<ChatResponse>()
             .await?;
 
-        if self.debug {
-            println!("DEBUG: Codestral response: {}", response.message);
-        }
-
-        Ok(response.message)
+        Ok(response.choices[0].message.content.clone())
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-
-    let api_key = std::env::var("MISTRAL_API_KEY").unwrap_or_else(|_| {
-        panic!("MISTRAL_API_KEY environment variable not set")
-    });
-
+    let api_key = std::env::var("MISTRAL_API_KEY").expect("MISTRAL_API_KEY not set");
     let chat_client = ChatClient::new(api_key, cli.debug);
 
     match cli.command {
         Commands::Chat { prompt } => {
-            // Simple heuristic to detect code-related queries
-            let is_code_related = prompt.to_lowercase().contains("code") || 
-                                 prompt.to_lowercase().contains("programming");
-            if is_code_related {
-                let analysis = chat_client.analyze_code(prompt.clone()).await?;
-                println!("Code analysis: {}", analysis);
-            }
-            chat_client.chat_stream(prompt).await?;
+            let messages = vec![RequestMessage {
+                role: "user".to_string(),
+                content: prompt.clone(),
+            }];
+            let model = if prompt.to_lowercase().contains("code") {
+                "codestral"
+            } else {
+                // "mistral-small"
+                "mistral-large-latest"
+            };
+            chat_client.chat_stream(model, messages).await?;
         }
         Commands::Test => {
             chat_client.test_connection().await?;
