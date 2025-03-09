@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use config::{Config as ConfigFile, Environment, File};
 use futures_util::StreamExt;
 use log::{debug, error, info};
 use reqwest::Client;
@@ -7,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use config::{Config as ConfigFile, File, Environment};
 
 /// Command-line argument parser for the CLI.
 #[derive(Parser)]
@@ -305,6 +305,8 @@ impl ChatClient {
                     if self.debug {
                         debug!("Chunk error: {}", e);
                     }
+                    // Inform the user about the streaming failure
+                    error!("Streaming failed: {}", e);
                 }
             }
         }
@@ -341,13 +343,29 @@ impl ChatClient {
             debug!("Request body: {}", serde_json::to_string(&request)?);
         }
 
-        let response = self
-            .client
-            .post("https://api.mistral.ai/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.mistral_api_key))
-            .json(&request)
-            .send()
-            .await?;
+        let mut attempts = 0;
+        let max_attempts = 3;
+
+        let response = loop {
+            match self
+                .client
+                .post("https://api.mistral.ai/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", self.mistral_api_key))
+                .json(&request)
+                .send()
+                .await
+            {
+                Ok(resp) => break resp,
+                Err(err) if attempts < max_attempts => {
+                    attempts += 1;
+                    error!("Retry attempt {}: {}", attempts, err);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                Err(err) => {
+                    return Err(err).context("Failed to send request after multiple attempts")
+                }
+            }
+        };
 
         let status = response.status();
 
@@ -357,7 +375,6 @@ impl ChatClient {
 
         if status.is_success() {
             info!("MISTRAL-API connection successful");
-            println!("MISTRAL-API connection successful");
         } else {
             error!("MISTRAL-API connection failed: {}", status);
             if self.debug {
@@ -388,16 +405,31 @@ impl ChatClient {
             );
         }
 
-        let codestral_response = self
-            .client
-            .post("https://codestral.mistral.ai/v1/chat/completions")
-            .header(
-                "Authorization",
-                format!("Bearer {}", self.codestral_api_key),
-            )
-            .json(&codestral_request)
-            .send()
-            .await?;
+        let mut attempts = 0;
+
+        let codestral_response = loop {
+            match self
+                .client
+                .post("https://codestral.mistral.ai/v1/chat/completions")
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.codestral_api_key),
+                )
+                .json(&codestral_request)
+                .send()
+                .await
+            {
+                Ok(resp) => break resp,
+                Err(err) if attempts < max_attempts => {
+                    attempts += 1;
+                    error!("Retry attempt {}: {}", attempts, err);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                Err(err) => {
+                    return Err(err).context("Failed to send request after multiple attempts")
+                }
+            }
+        };
 
         let status = codestral_response.status();
 
@@ -407,7 +439,6 @@ impl ChatClient {
 
         if status.is_success() {
             info!("CODESTRAL-API connection successful");
-            println!("CODESTRAL-API connection successful");
         } else {
             error!("CODESTRAL-API connection failed: {}", status);
             if self.debug {
@@ -479,14 +510,23 @@ impl ChatClient {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize the logger
-    env_logger::init();
-
     let cli = Cli::parse();
+
+    let mut builder = env_logger::Builder::from_default_env();
+    builder.filter_level(if cli.debug {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    });
+    builder.init();
 
     match &cli.command {
         Commands::Chat { prompt } => {
-            let config = Config::from_file("config.toml").expect("Failed to read configuration file");
-            let chat_client = ChatClient::new(config.mistral_api_key, config.codestral_api_key, config.debug);
+            let config =
+                Config::from_file("config.toml").expect("Failed to read configuration file");
+            let debug = cli.debug || config.debug;
+            let chat_client =
+                ChatClient::new(config.mistral_api_key, config.codestral_api_key, debug);
             let messages = vec![RequestMessage {
                 role: "user".to_string(),
                 content: prompt.clone(),
@@ -499,13 +539,19 @@ async fn main() -> Result<()> {
             chat_client.chat_stream(model, messages).await?;
         }
         Commands::Test => {
-            let config = Config::from_file("config.toml").expect("Failed to read configuration file");
-            let chat_client = ChatClient::new(config.mistral_api_key, config.codestral_api_key, config.debug);
+            let config =
+                Config::from_file("config.toml").expect("Failed to read configuration file");
+            let debug = cli.debug || config.debug;
+            let chat_client =
+                ChatClient::new(config.mistral_api_key, config.codestral_api_key, debug);
             chat_client.test_connection().await?;
         }
         Commands::Code { code } => {
-            let config = Config::from_file("config.toml").expect("Failed to read configuration file");
-            let chat_client = ChatClient::new(config.mistral_api_key, config.codestral_api_key, config.debug);
+            let config =
+                Config::from_file("config.toml").expect("Failed to read configuration file");
+            let debug = cli.debug || config.debug;
+            let chat_client =
+                ChatClient::new(config.mistral_api_key, config.codestral_api_key, debug);
             let analysis = chat_client.analyze_code(code.clone()).await?;
             info!("{}", analysis);
         }
@@ -516,13 +562,17 @@ async fn main() -> Result<()> {
                 println!("Sample config file generated at {}", file_path);
             }
             ConfigCommands::View => {
-                let config = Config::from_file("config.toml").expect("Failed to read configuration file");
+                let config =
+                    Config::from_file("config.toml").expect("Failed to read configuration file");
                 Config::view_config(&config);
             }
             ConfigCommands::Load { file_path } => {
-                let config = Config::from_file(file_path).expect("Failed to read configuration file");
+                let config =
+                    Config::from_file(file_path).expect("Failed to read configuration file");
                 println!("Configuration loaded from {}", file_path);
                 Config::view_config(&config);
+                // Optionally, set this as the new default config file
+                // fs::copy(file_path, "config.toml").expect("Failed to set new default config file");
             }
         },
     }
