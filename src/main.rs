@@ -52,15 +52,17 @@ struct Choice {
 
 struct ChatClient {
     client: Client,
-    api_key: String,
+    mistral_api_key: String,
+    codestral_api_key: String,
     debug: bool,
 }
 
 impl ChatClient {
-    fn new(api_key: String, debug: bool) -> Self {
+    fn new(mistral_api_key: String, codestral_api_key: String, debug: bool) -> Self {
         ChatClient {
             client: Client::new(),
-            api_key,
+            mistral_api_key,
+            codestral_api_key,
             debug,
         }
     }
@@ -93,9 +95,15 @@ impl ChatClient {
             "https://api.mistral.ai/v1/chat/completions"
         };
 
+        let api_key = if model.contains("codestral") {
+            &self.codestral_api_key
+        } else {
+            &self.mistral_api_key
+        };
+
         let response = self.client
             .post(url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", api_key))
             .json(&request)
             .send()
             .await?;
@@ -166,7 +174,7 @@ impl ChatClient {
         }];
 
         let request = ChatRequest {
-            model: "mistral-small".to_string(),
+            model: "mistral-large-latest".to_string(),
             messages,
             stream: false,
             max_tokens: Some(1),
@@ -178,12 +186,12 @@ impl ChatClient {
 
         let response = self.client
             .post("https://api.mistral.ai/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", self.mistral_api_key))
             .json(&request)
             .send()
             .await?;
 
-        let status = response.status(); // Store the status before consuming response
+        let status = response.status();
 
         if self.debug {
             println!("DEBUG: Status: {}", status);
@@ -194,7 +202,7 @@ impl ChatClient {
         } else {
             println!("API connection failed: {}", status);
             if self.debug {
-                let text = response.text().await?; // Safe to consume response here
+                let text = response.text().await?;
                 println!("DEBUG: Response body: {}", text);
             }
             if status == reqwest::StatusCode::UNAUTHORIZED {
@@ -217,7 +225,7 @@ impl ChatClient {
         }];
 
         let request = ChatRequest {
-            model: "codestral".to_string(),
+            model: "codestral-latest".to_string(),
             messages,
             stream: false,
             max_tokens: None,
@@ -229,7 +237,7 @@ impl ChatClient {
 
         let response = self.client
             .post("https://codestral.mistral.ai/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {}", self.codestral_api_key))
             .json(&request)
             .send()
             .await?
@@ -243,8 +251,9 @@ impl ChatClient {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-    let api_key = std::env::var("MISTRAL_API_KEY").expect("MISTRAL_API_KEY not set");
-    let chat_client = ChatClient::new(api_key, cli.debug);
+    let mistral_api_key = std::env::var("MISTRAL_API_KEY").expect("MISTRAL_API_KEY not set");
+    let codestral_api_key = std::env::var("CODESTRAL_API_KEY").expect("CODESTRAL_API_KEY not set");
+    let chat_client = ChatClient::new(mistral_api_key, codestral_api_key, cli.debug);
 
     match cli.command {
         Commands::Chat { prompt } => {
@@ -253,9 +262,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 content: prompt.clone(),
             }];
             let model = if prompt.to_lowercase().contains("code") {
-                "codestral"
+                "codestral-latest"
             } else {
-                // "mistral-small"
                 "mistral-large-latest"
             };
             chat_client.chat_stream(model, messages).await?;
