@@ -4,6 +4,7 @@ use futures_util::StreamExt;
 use log::{debug, error, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use config::{Config as ConfigFile, File, Environment};
@@ -16,7 +17,7 @@ struct Cli {
     #[arg(long)]
     debug: bool,
 
-    /// Subcommand to execute (e.g., chat, test, code).
+    /// Subcommand to execute (e.g., chat, test, code, config).
     #[command(subcommand)]
     command: Commands,
 }
@@ -32,6 +33,12 @@ enum Commands {
 
     /// Analyze a code snippet using the API.
     Code { code: String },
+
+    /// Manage configuration files.
+    Config {
+        #[command(subcommand)]
+        config_command: ConfigCommands,
+    },
 }
 
 /// Struct representing a request message sent to the API.
@@ -81,8 +88,29 @@ struct Choice {
     message: ResponseMessage,
 }
 
+/// Enum representing the configuration subcommands.
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Generate a sample configuration file.
+    Generate {
+        /// Optional path to generate the config file.
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+
+    /// View the current configuration.
+    View,
+
+    /// Load a configuration file from a specified path.
+    Load {
+        /// Path to the configuration file.
+        #[arg(short, long)]
+        file_path: String,
+    },
+}
+
 /// Struct representing configuration for the CLI.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Config {
     mistral_api_key: String,
     codestral_api_key: String,
@@ -101,8 +129,26 @@ impl Config {
         // Try to deserialize the configuration into the `Config` struct
         settings.try_deserialize()
     }
-}
 
+    fn generate_sample_config(file_path: &str) -> Result<()> {
+        let sample_config = Config {
+            mistral_api_key: "your_mistral_api_key".to_string(),
+            codestral_api_key: "your_codestral_api_key".to_string(),
+            debug: false,
+        };
+
+        let config_content = toml::to_string(&sample_config)?;
+        fs::write(file_path, config_content)?;
+        Ok(())
+    }
+
+    fn view_config(config: &Config) {
+        println!("Current Configuration:");
+        println!("Mistral API Key: {}", config.mistral_api_key);
+        println!("Codestral API Key: {}", config.codestral_api_key);
+        println!("Debug Mode: {}", config.debug);
+    }
+}
 
 /// A client for interacting with the Mistral and Codestral APIs.
 ///
@@ -437,13 +483,10 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // Load configuration from a file
-    let config = Config::from_file("config.toml").expect("Failed to read configuration file");
-
-    let chat_client = ChatClient::new(config.mistral_api_key, config.codestral_api_key, config.debug);
-
-    match cli.command {
+    match &cli.command {
         Commands::Chat { prompt } => {
+            let config = Config::from_file("config.toml").expect("Failed to read configuration file");
+            let chat_client = ChatClient::new(config.mistral_api_key, config.codestral_api_key, config.debug);
             let messages = vec![RequestMessage {
                 role: "user".to_string(),
                 content: prompt.clone(),
@@ -456,12 +499,32 @@ async fn main() -> Result<()> {
             chat_client.chat_stream(model, messages).await?;
         }
         Commands::Test => {
+            let config = Config::from_file("config.toml").expect("Failed to read configuration file");
+            let chat_client = ChatClient::new(config.mistral_api_key, config.codestral_api_key, config.debug);
             chat_client.test_connection().await?;
         }
         Commands::Code { code } => {
-            let analysis = chat_client.analyze_code(code).await?;
+            let config = Config::from_file("config.toml").expect("Failed to read configuration file");
+            let chat_client = ChatClient::new(config.mistral_api_key, config.codestral_api_key, config.debug);
+            let analysis = chat_client.analyze_code(code.clone()).await?;
             info!("{}", analysis);
         }
+        Commands::Config { config_command } => match config_command {
+            ConfigCommands::Generate { path } => {
+                let file_path = path.as_deref().unwrap_or("config.toml");
+                Config::generate_sample_config(file_path).expect("Failed to generate config file");
+                println!("Sample config file generated at {}", file_path);
+            }
+            ConfigCommands::View => {
+                let config = Config::from_file("config.toml").expect("Failed to read configuration file");
+                Config::view_config(&config);
+            }
+            ConfigCommands::Load { file_path } => {
+                let config = Config::from_file(file_path).expect("Failed to read configuration file");
+                println!("Configuration loaded from {}", file_path);
+                Config::view_config(&config);
+            }
+        },
     }
 
     Ok(())
