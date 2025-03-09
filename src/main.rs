@@ -1,9 +1,10 @@
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use futures_util::StreamExt;
-use std::error::Error;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -68,14 +69,17 @@ impl ChatClient {
     }
 
     /// Streams chat completions from the API and prints them to stdout
-    async fn chat_stream(&self, model: &str, messages: Vec<RequestMessage>) -> Result<(), Box<dyn Error>> {
+    async fn chat_stream(&self, model: &str, messages: Vec<RequestMessage>) -> Result<()> {
         if self.debug {
             println!("DEBUG: Sending streaming request to {} API", model);
-            println!("DEBUG: Using URL: {}", if model.contains("codestral") {
-                "https://codestral.mistral.ai/v1/chat/completions"
-            } else {
-                "https://api.mistral.ai/v1/chat/completions"
-            });
+            println!(
+                "DEBUG: Using URL: {}",
+                if model.contains("codestral") {
+                    "https://codestral.mistral.ai/v1/chat/completions"
+                } else {
+                    "https://api.mistral.ai/v1/chat/completions"
+                }
+            );
         }
 
         let request = ChatRequest {
@@ -101,12 +105,29 @@ impl ChatClient {
             &self.mistral_api_key
         };
 
-        let response = self.client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .json(&request)
-            .send()
-            .await?;
+        let mut attempts = 0;
+        let max_attempts = 3;
+
+        let response = loop {
+            match self
+                .client
+                .post(url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&request)
+                .send()
+                .await
+            {
+                Ok(resp) => break resp,
+                Err(err) if attempts < max_attempts => {
+                    attempts += 1;
+                    println!("Retry attempt {}: {}", attempts, err);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                Err(err) => {
+                    return Err(err).context("Failed to send request after multiple attempts")
+                }
+            }
+        };
 
         if self.debug {
             println!("DEBUG: Response status: {}", response.status());
@@ -135,7 +156,9 @@ impl ChatClient {
                             }
                             match serde_json::from_str::<serde_json::Value>(data) {
                                 Ok(json) => {
-                                    if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
+                                    if let Some(content) =
+                                        json["choices"][0]["delta"]["content"].as_str()
+                                    {
                                         stdout.write_all(content.as_bytes()).await?;
                                         stdout.flush().await?;
                                     } else if self.debug {
@@ -163,7 +186,7 @@ impl ChatClient {
     }
 
     /// Tests API connectivity with a minimal request
-    async fn test_connection(&self) -> Result<(), Box<dyn Error>> {
+    async fn test_connection(&self) -> Result<()> {
         if self.debug {
             println!("DEBUG: Testing API connection...");
         }
@@ -184,7 +207,8 @@ impl ChatClient {
             println!("DEBUG: Request body: {}", serde_json::to_string(&request)?);
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post("https://api.mistral.ai/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.mistral_api_key))
             .json(&request)
@@ -223,12 +247,19 @@ impl ChatClient {
         };
 
         if self.debug {
-            println!("DEBUG: Request body: {}", serde_json::to_string(&codestral_request)?);
+            println!(
+                "DEBUG: Request body: {}",
+                serde_json::to_string(&codestral_request)?
+            );
         }
 
-        let codestral_response = self.client
+        let codestral_response = self
+            .client
             .post("https://codestral.mistral.ai/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.codestral_api_key))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.codestral_api_key),
+            )
             .json(&codestral_request)
             .send()
             .await?;
@@ -256,7 +287,7 @@ impl ChatClient {
     }
 
     /// Analyzes code using the Codestral API
-    async fn analyze_code(&self, code: String) -> Result<String, Box<dyn Error>> {
+    async fn analyze_code(&self, code: String) -> Result<String> {
         if self.debug {
             println!("DEBUG: Sending code to Codestral API");
         }
@@ -277,9 +308,13 @@ impl ChatClient {
             println!("DEBUG: Request body: {}", serde_json::to_string(&request)?);
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post("https://codestral.mistral.ai/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.codestral_api_key))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.codestral_api_key),
+            )
             .json(&request)
             .send()
             .await?
@@ -291,10 +326,11 @@ impl ChatClient {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mistral_api_key = std::env::var("MISTRAL_API_KEY").expect("MISTRAL_API_KEY not set");
-    let codestral_api_key = std::env::var("CODESTRAL_API_KEY").expect("CODESTRAL_API_KEY not set");
+    let mistral_api_key = std::env::var("MISTRAL_API_KEY").context("MISTRAL_API_KEY not set")?;
+    let codestral_api_key =
+        std::env::var("CODESTRAL_API_KEY").context("CODESTRAL_API_KEY not set")?;
     let chat_client = ChatClient::new(mistral_api_key, codestral_api_key, cli.debug);
 
     match cli.command {
